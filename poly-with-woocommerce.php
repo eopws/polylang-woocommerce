@@ -15,3 +15,5 @@
 defined('ABSPATH') or die;
 
 define('POLYWOO_DIR', dirname(__FILE__) . '/');
+
+require_once 'bootstrap.php';
