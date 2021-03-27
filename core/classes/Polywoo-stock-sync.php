@@ -7,7 +7,6 @@ class Polywoo_stock_sync
 {
 
 	public function __construct() {
-		// On processed update product stock event
 		add_action( 'woocommerce_product_set_stock', [$this, 'sync_stock'] );
 		add_action( 'woocommerce_variation_set_stock', [$this, 'sync_stock'] );
 	}

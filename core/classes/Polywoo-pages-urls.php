@@ -1,7 +1,6 @@
 <?php
 
 class Polywoo_pages_urls {
-
     public function __construct() {
         $pages = [
             'cart',

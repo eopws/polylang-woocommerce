@@ -18,7 +18,7 @@ class Polywoo_products_sync
      * Add product and product_variation types to list of translatable post types
      *
      * @param array $types list of translatable post types
-     * 
+     *
      * @return array
      */
     public function make_products_translatable(array $types) {

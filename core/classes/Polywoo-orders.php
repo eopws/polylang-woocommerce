@@ -45,11 +45,11 @@ class Polywoo_orders
     }
 
     /**
-     * Set order language to current language
+     * Set order order language to current language
      *
-     * @param int $order_id order id
+     * @param array $types list of translatable post types
      *
-     * @return void
+     * @return array
      */
     public function set_order_language(int $order_id) {
         $lang = pll_current_language('slug');

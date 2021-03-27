@@ -4,6 +4,11 @@
  * Here we load all needed classes and files
  */
 
+/*add_action('init', 'test');
+function test() {
+    print_r(pll_get_post_language(1010, 'name'));die;
+}*/
+
 // temporary for tests
 add_filter( 'wc_product_has_unique_sku', '__return_false' );
 

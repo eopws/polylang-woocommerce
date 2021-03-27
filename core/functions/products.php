@@ -10,7 +10,7 @@
  *
  * @return WP_Error|boolean
  */
-function polywoo_delete_product( $product, bool $force = false ) {
+function polywoo_delete_product( $product, $force = false ) {
     $product = is_int($product) ? wc_get_product($product) : $product;
 
     if ( empty($product) )
