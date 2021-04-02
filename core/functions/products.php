@@ -72,8 +72,8 @@ function polywoo_copy_product_meta_properties( WC_Product $product_from, WC_Prod
 
     if ( ! empty($product_from->get_stock_quantity()) ) {
         $product_to->set_stock_quantity( $product_from->get_stock_quantity() );
-        $product_to->set_manage_stock(true);
-        $product_to->set_stock_status('');
+        $product_to->set_manage_stock( $product_from->get_manage_stock() );
+        $product_to->set_stock_status( $product_from->get_stock_status() );
     } else {
         $product_to->set_manage_stock(false);
     }

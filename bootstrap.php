@@ -4,11 +4,6 @@
  * Here we load all needed classes and files
  */
 
-/*add_action('init', 'test');
-function test() {
-    print_r(pll_get_post_language(1010, 'name'));die;
-}*/
-
 // temporary for tests
 add_filter( 'wc_product_has_unique_sku', '__return_false' );
 
@@ -25,6 +20,7 @@ function polywoo_classes_autoload($class) {
 }
 spl_autoload_register('polywoo_classes_autoload', true, true);
 
+new Polywoo_variations_sync;
 new Polywoo_pages_urls;
 new Polywoo_ajax;
 new Polywoo_orders;

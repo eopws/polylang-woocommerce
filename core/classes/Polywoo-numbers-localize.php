@@ -1,6 +1,7 @@
 <?php
 
-class Polywoo_numbers_localize {
+class Polywoo_numbers_localize
+{
 
     public function __construct() {
         add_filter( 'wc_get_price_decimal_separator', [$this, 'get_decimal_separator'] );

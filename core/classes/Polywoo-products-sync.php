@@ -1,24 +1,50 @@
 <?php
 
 /**
- * Handle single variation translations
+ * Handle product translations
  */
 class Polywoo_products_sync
 {
 
     public function __construct() {
-        add_action( 'save_post_product', [$this, 'on_save_product'], 150);
+        add_action( 'save_post_product', [$this, 'on_save_product'], 1);
 
-        add_action( 'woocommerce_update_product', [$this, 'on_product_updating'] );
+        add_action( 'woocommerce_update_product', [$this, 'on_product_updating'], 1 );
 
         add_filter( 'pll_get_post_types', [$this, 'make_products_translatable'] );
+
+        //add_filter( 'woocommerce_product_data_tabs', [$this, 'remove_product_tabs'], 150 );
+    }
+
+    /**
+     * Hide tabs on product edit page to prevent product translations missynchronization
+     *
+     * @param array $tabs
+     *
+     * @return array
+     */
+    public function remove_product_tabs($tabs) {
+        global $post;
+
+        // if editing first product of all product translation don't remove tabs
+        if (
+            ( (int) min( pll_get_post_translations($post->ID) ) === (int) $post->ID ) &&
+            ( strpos( $_SERVER['REQUEST_URI'], 'from_post' ) === false )
+        )
+            return $tabs;
+
+        // if creating product translation show only advanced tab
+        if ( strpos( $_SERVER['REQUEST_URI'], 'from_post' ) !== false )
+            return [ $tabs['advanced'] ];
+
+        return [ $tabs['shipping'], $tabs['advanced'] ];
     }
 
     /**
      * Add product and product_variation types to list of translatable post types
      *
      * @param array $types list of translatable post types
-     *
+     * 
      * @return array
      */
     public function make_products_translatable(array $types) {
@@ -36,6 +62,7 @@ class Polywoo_products_sync
         }
 
         $types[] = 'product';
+        $types[] = 'product_variation';
 
         return $types;
     }
@@ -44,12 +71,13 @@ class Polywoo_products_sync
      * Fires whenever a variable product created to handle its translations
      *
      * @param int $product_id id of the product being created or updated
+     *
      * @return void
      */
     public function on_save_product( int $product_id ) {
         if ( get_post_status($product_id) !== 'publish' ) return;
 
-        $product = wc_get_product( $product_id );
+        $product = wc_get_product($product_id);
 
         if ( !$product ) return;
 
@@ -63,6 +91,7 @@ class Polywoo_products_sync
      * Called when creating a product translation to handle its translation
      *
      * @param WC_Product|int $old_product the product or the product id
+     *
      * @return void
      */
     private function on_translation_creation( $old_product ) {
@@ -111,95 +140,47 @@ class Polywoo_products_sync
     }
 
     /**
+     * Fires whenever product or product variation is being updated
+     *
+     * @param WC_Product|int $product
+     *
+     * @return void
+     */
+    public function on_product_updating($product) {
+        $product = is_int($product) ? wc_get_product($product) : $product;
+
+        $this->product_translations = pll_get_post_translations($product->get_id());
+
+        // handle only product parent updating
+        if ( min($this->product_translations) !== $product->get_id() ) return;
+
+        $product_translation_ids = $this->product_translations;
+
+        // iterate only over the product translations excluding the first product itself
+        unset($product_translation_ids[array_search($product->get_id(), $product_translation_ids)]);
+
+        foreach ( $product_translation_ids as $product_translation_id ) {
+            $product_translation_object = wc_get_product($product_translation_id);
+
+            if ( !$product_translation_object ) continue;
+
+            polywoo_copy_product_meta_properties($product, $product_translation_object);
+
+            $product_translation_object->save();
+        }
+    }
+
+    /**
      * Set variations to a product and update translations fields
      *
      * @param WC_Product $product_from product which from take variations
      * @param WC_Product $product_to product to set variations to
-     *
-     * @return void
      */
     private function set_variations( WC_Product $product_from, WC_Product $product_to ) {
         $variation_to_copy_ids = $product_from->get_children();
 
         foreach ( $variation_to_copy_ids as $variation_to_copy_id ) {
-            $this->create_product_variation_copy($product_to, $variation_to_copy_id);
+            Polywoo_variations_sync::create_product_variation_copy($product_to, $variation_to_copy_id);
         }
-    }
-
-    /**
-     * Creates a copy of variation and sets it to the given product
-     *
-     * @param WC_Product|int $product product or product id to set variation to
-     * @param int $variation_to_copy_id variation to copy info from
-     *
-     * @return void
-     */
-    private function create_product_variation_copy( $product, int $variation_to_copy_id ) {
-        $product = is_int($product) ? wc_get_product($product) : $product;
-        $product_id = $product->get_id();
-
-        $product_variation = array(
-            'post_title'  => $product->get_name(),
-            'post_name'   => 'product-'.$product_id.'-variation',
-            'post_status' => 'publish',
-            'post_parent' => $product_id,
-            'post_type'   => 'product_variation',
-            'guid'        => $product->get_permalink()
-        );
-
-        $variation_id = wp_insert_post($product_variation);
-
-        $variation = new WC_Product_Variation($variation_id);
-
-        $variation_to_copy = wc_get_product($variation_to_copy_id);
-
-        foreach ( $variation_to_copy->get_variation_attributes(false) as $taxonomy => $term_slug ) {
-            $attribute = substr($taxonomy, 3);
-
-            // get term translation slug
-            if ( pll_is_translated_taxonomy($taxonomy) ) {
-                $product_lang = pll_get_post_language($product_id, 'slug');
-
-                $term_id = get_term_by('slug', $term_slug, $taxonomy, 'ARRAY_A')['term_id'];
-                $term_translation_id = pll_get_term($term_id, $product_lang);
-                $term_slug = get_term_by('id', $term_translation_id, $taxonomy, 'ARRAY_A')['slug'];
-            }
-
-            // If taxonomy doesn't exists we create it
-            if( !taxonomy_exists($taxonomy) ) {
-                register_taxonomy(
-                    $taxonomy,
-                   'product_variation',
-                    array(
-                        'hierarchical' => false,
-                        'label' => ucfirst( $attribute ),
-                        'query_var' => true,
-                        'rewrite' => array( 'slug' => sanitize_title($attribute) ), // The base slug
-                    ),
-                );
-            }
-
-            if ( !term_exists($term_slug, $taxonomy) )
-                wp_insert_term($term_slug, $taxonomy);
-
-            $term_name = get_term_by('slug', $term_slug, $taxonomy, 'ARRAY_A')['name'];
-
-            $post_term_names =  wp_get_post_terms( $product_id, $taxonomy, array('fields' => 'names') );
-
-            if( !in_array($term_name, $post_term_names) )
-                wp_set_post_terms($product_id, $term_name, $taxonomy, true);
-
-            update_post_meta($variation_id, 'attribute_'.$taxonomy, $term_slug);
-        }
-
-        ## Set/save all other data
-
-        polywoo_copy_product_meta_properties($variation_to_copy, $variation);
-
-        $variation->save();
-
-        $lang = pll_get_post_language($product->get_id(), 'slug');
-
-        polywoo_set_product_as_translation_to($variation, $variation_to_copy, $lang);
     }
 }
