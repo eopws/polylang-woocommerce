@@ -5,26 +5,27 @@ class Polywoo_variations_sync
 
     private $post_statuses_to_proceed = ['publish', 'trash'];
 
-    private const VARIATION_TRANSLATION_META_KEY = '_variation_translations';
+    public const VARIATION_TRANSLATION_META_KEY = '_variation_translations';
 
     public function __construct() {
-        add_action( 'save_post_product', [$this, 'sync_variations'] );
-        add_action( 'woocommerce_ajax_save_product_variations', [$this, 'sync_variations'] );
+        add_action( 'save_post_product', 'Polywoo_variations_sync::sync_variations', 100 );
+        add_action( 'woocommerce_ajax_save_product_variations', 'Polywoo_variations_sync::sync_variations' );
 
-        add_action( 'wp_ajax_woocommerce_remove_variations', [$this, 'delete_variations'] );
+        add_action( 'wp_ajax_woocommerce_remove_variations', [$this, 'on_delete_variations'] );
     }
 
-    public function sync_variations($product_id) {
+    public static function sync_variations($product) {
         global $wpdb;
 
-        remove_action( 'save_post_product', [$this, __FUNCTION__] );
-        remove_action( 'woocommerce_ajax_save_product_variations', [$this, __FUNCTION__] );
+        remove_action( 'save_post_product', 'Polywoo_variations_sync::sync_variations', 100 );
+        remove_action( 'woocommerce_ajax_save_product_variations', 'Polywoo_variations_sync::sync_variations' );
 
-        $product = wc_get_product($product_id);
+        $product = is_int($product) ? wc_get_product($product) : $product;
+        $product_id = $product->get_id();
 
         if ( !$product || !$product->is_type('variable') ) {
-            add_action( 'save_post_product', [$this, __FUNCTION__] );
-            add_action( 'woocommerce_ajax_save_product_variations', [$this, __FUNCTION__] );
+            add_action( 'save_post_product', 'Polywoo_variations_sync::sync_variations', 100 );
+            add_action( 'woocommerce_ajax_save_product_variations', 'Polywoo_variations_sync::sync_variations' );
             return;
         }
 
@@ -32,7 +33,15 @@ class Polywoo_variations_sync
 
         unset($product_translations[array_search($product->get_id(), $product_translations)]);
 
-        $product_from_variations = $product->get_children();
+        $product_from_variations_raw = $wpdb->get_results("SELECT `ID` FROM `{$wpdb->prefix}posts`
+            WHERE `post_parent` = {$product->get_id()} AND `post_type` = 'product_variation'
+        ", 'ARRAY_N');
+
+        $product_from_variations = [];
+
+        foreach ( $product_from_variations_raw as $product_from_variation_raw ) {
+            $product_from_variations[] = $product_from_variation_raw[0];
+        }
 
         foreach ( $product_translations as $product_translation_id ) {
             $product_translation = wc_get_product($product_translation_id);
@@ -48,7 +57,7 @@ class Polywoo_variations_sync
             }
 
             foreach ( $product_from_variations as $product_from_variation_id ) {
-                $product_from_variation_translations = $this->get_variation_translations($product_from_variation_id);
+                $product_from_variation_translations = self::get_variation_translations($product_from_variation_id);
 
                 $product_from_variation_id_translation = array_intersect($product_from_variation_translations, $product_translation_variations);
 
@@ -60,7 +69,7 @@ class Polywoo_variations_sync
 
                     polywoo_copy_product_meta_properties($product_from_variation, $product_from_variation_translation);
 
-                    $this->sync_variation_attributes($product_from_variation, $product_from_variation_translation);
+                    self::sync_variation_attributes($product_from_variation, $product_from_variation_translation);
 
                     $product_from_variation_translation->save();
                 } elseif ( count($product_from_variation_id_translation) === 0 ) {
@@ -69,8 +78,8 @@ class Polywoo_variations_sync
             }
         }
 
-        add_action( 'save_post_product', [$this, __FUNCTION__] );
-        add_action( 'woocommerce_ajax_save_product_variations', [$this, __FUNCTION__] );
+        add_action( 'save_post_product', 'Polywoo_variations_sync::sync_variations', 100 );
+        add_action( 'woocommerce_ajax_save_product_variations', 'Polywoo_variations_sync::sync_variations' );
     }
 
     /**
@@ -81,7 +90,7 @@ class Polywoo_variations_sync
      *
      * @return void
      */
-    public function sync_variation_attributes($variation_from, $variation_to) {
+    public static function sync_variation_attributes($variation_from, $variation_to) {
         $variation_from = is_int($variation_from) ? wc_get_product($variation_from) : $variation_from;
         $variation_to = is_int($variation_to) ? wc_get_product($variation_to) : $variation_to;
 
@@ -104,23 +113,30 @@ class Polywoo_variations_sync
     }
 
     /**
-     * Delete all a product variation with id from $_POST var
-     *
-     * @return void
+     * 
      */
-    public function delete_variations() {
-        global $wpdb;
+    public function on_delete_variations() {
+        if (!isset($_POST['variation_ids'])) return;
 
         if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
             return false;
         }
 
-        if (!isset($_POST['variation_ids'])) return;
+        self::delete_variations($_POST['variation_ids']);
+    }
 
-        $variation_ids = isset($_POST['variation_ids']) ? (array) $_POST['variation_ids'] : [];
+    /**
+     * Delete variations
+     *
+     * @param array $variation_ids array variations to delete
+     *
+     * @return void
+     */
+    public static function delete_variations( array $variation_ids ) {
+        global $wpdb;
 
         foreach ($variation_ids as $variation_id) {
-            $variation_translations = $this->get_variation_translations($variation_id) ?? [];
+            $variation_translations = self::get_variation_translations($variation_id) ?? [];
 
             foreach ( $variation_translations as $variation_translation_id ) {
                 $variation_translation_id = intval($variation_translation_id);
@@ -131,8 +147,11 @@ class Polywoo_variations_sync
                     $variation_translation->delete(true);
 
                 // delete translations info
-                $wpdb->query("DELETE FROM `{$wpdb->prefix}postmeta` WHERE `post_id` = $variation_translation_id");
+                $meta_key = self::VARIATION_TRANSLATION_META_KEY;
+                $wpdb->query("DELETE FROM `{$wpdb->prefix}postmeta` WHERE `meta_key` = $meta_key `post_id` = $variation_translation_id");
             }
+
+            wc_get_product($variation_id)->delete(true);
         }
     }
 
@@ -143,7 +162,7 @@ class Polywoo_variations_sync
      *
      * @return array array of variations translations
      */
-    public function get_variation_translations($variation_id) {
+    public static function get_variation_translations($variation_id) {
         global $wpdb;
 
         // make sure an integer value passed

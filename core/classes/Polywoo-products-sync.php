@@ -11,7 +11,11 @@ class Polywoo_products_sync
 
         add_action( 'woocommerce_update_product', [$this, 'on_product_updating'], 1 );
 
+        add_action( 'woocommerce_product_type_changed', [$this, 'handle_product_type_changed'] );
+
         add_filter( 'pll_get_post_types', [$this, 'make_products_translatable'] );
+
+        add_filter( 'wc_product_has_unique_sku', [$this, 'allow_products_share_the_same_sku'], 150, 3 );
 
         //add_filter( 'woocommerce_product_data_tabs', [$this, 'remove_product_tabs'], 150 );
     }
@@ -147,17 +151,19 @@ class Polywoo_products_sync
      * @return void
      */
     public function on_product_updating($product) {
+        global $wpdb;
+
         $product = is_int($product) ? wc_get_product($product) : $product;
 
-        $this->product_translations = pll_get_post_translations($product->get_id());
+        $product_translation_ids = pll_get_post_translations($product->get_id());
 
         // handle only product parent updating
-        if ( min($this->product_translations) !== $product->get_id() ) return;
-
-        $product_translation_ids = $this->product_translations;
+        if ( min($product_translation_ids) !== $product->get_id() ) return;
 
         // iterate only over the product translations excluding the first product itself
         unset($product_translation_ids[array_search($product->get_id(), $product_translation_ids)]);
+
+        $product_type = $product->get_type();
 
         foreach ( $product_translation_ids as $product_translation_id ) {
             $product_translation_object = wc_get_product($product_translation_id);
@@ -167,6 +173,38 @@ class Polywoo_products_sync
             polywoo_copy_product_meta_properties($product, $product_translation_object);
 
             $product_translation_object->save();
+        }
+    }
+
+    public function handle_product_type_changed($product) {
+        global $wpdb;
+
+        $new_type = $product->get_type();
+
+        $product_translation_ids = pll_get_post_translations($product->get_id());
+
+        // iterate only over the product translations excluding the first product itself
+        unset($product_translation_ids[array_search($product->get_id(), $product_translation_ids)]);
+
+        foreach ( $product_translation_ids as $product_translation_id ) {
+            wp_set_object_terms( $product_translation_id, $new_type, 'product_type' );
+
+            if ( $new_type === 'variable' ) continue;
+
+            $product_translation_variations_objects = $wpdb->get_results("SELECT * FROM `{$wpdb->prefix}posts` WHERE `post_parent` = $product_translation_id AND `post_type` = 'product_variation'");
+
+            $product_translation_variations = [];
+
+            foreach ( $product_translation_variations_objects as $product_translation_variations_object ) {
+                $product_translation_variations[] = $product_translation_variations_object->ID;
+            }
+
+            // delete product variations if switched from variable product
+            Polywoo_variations_sync::delete_variations($product_translation_variations);
+        }
+
+        if ( $new_type === 'variable' ) {
+            Polywoo_variations_sync::sync_variations($product);
         }
     }
 
@@ -182,5 +220,44 @@ class Polywoo_products_sync
         foreach ( $variation_to_copy_ids as $variation_to_copy_id ) {
             Polywoo_variations_sync::create_product_variation_copy($product_to, $variation_to_copy_id);
         }
+    }
+
+    public function allow_products_share_the_same_sku($sku_found, $product_id, $sku) {
+        global $wpdb;
+
+        if ( !$sku_found ) {
+            return false;
+        }
+
+        if ( !$product_id ) {
+            return $sku_found;
+        }
+
+        $product_ids = $wpdb->get_col(
+            $wpdb->prepare(
+            "SELECT $wpdb->posts.ID
+                    FROM $wpdb->posts
+                    LEFT JOIN $wpdb->postmeta ON ( $wpdb->posts.ID = $wpdb->postmeta.post_id )
+                    WHERE $wpdb->posts.post_type IN ( 'product', 'product_variation' )
+                        AND $wpdb->posts.post_status != 'trash'
+                        AND $wpdb->postmeta.meta_key = '_sku' AND $wpdb->postmeta.meta_value = %s
+                        AND $wpdb->postmeta.post_id <> %d
+                    ", wp_slash( $sku ), $product_id
+            )
+            );
+
+        $product_lang = pll_get_post_language( $product_id );
+
+        if ( !$product_lang ) {
+            return $sku_found;
+        }
+
+        foreach ( $product_ids as $meta_product_id ) {
+            if ( $meta_product_id != $product_id && $product_lang == pll_get_post_language( $meta_product_id ) ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
